@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Povi Vision Debug</title>
+  </head>
+  <body>
+    <main class="debug-view">
+      <header class="debug-view__header">
+        <h1>Vision Debug</h1>
+        <span>Status: <strong id="stream-state" data-state="idle">Bereit</strong></span>
+      </header>
+
+      <section class="camera-panel" aria-label="Kameravorschau mit Erkennungsrahmen">
+        <canvas id="camera-preview" width="320" height="240"></canvas>
+        <p id="camera-placeholder">Kamera wird gestartet …</p>
+      </section>
+
+      <pre id="debug-output" class="debug-output" aria-live="polite">Action: -
+Confidence: -
+Detections: 0
+Frame: -</pre>
+
+      <p id="runtime-note" class="runtime-note">Vision-Backend wird geprüft …</p>
+
+      <footer class="debug-view__controls">
+        <button id="start-camera" type="button">Kamera starten</button>
+        <button id="stop-camera" type="button" disabled>Kamera stoppen</button>
+      </footer>
+    </main>
+    <script type="module" src="/src/vision-debug.ts"></script>
+  </body>
+</html>
