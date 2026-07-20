@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "npm run test:frontend && npm run test:rust",
+    "test": "npm run test:frontend",
+    "test:all": "npm run test:frontend && npm run test:rust",
     "test:frontend": "vitest run",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "lint": "npm run lint:frontend && npm run lint:rust",
+    "lint": "npm run lint:frontend",
+    "lint:all": "npm run lint:frontend && npm run lint:rust",
     "lint:frontend": "tsc --noEmit",
     "lint:rust": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings",
     "tauri": "tauri"

@@ -38,13 +38,15 @@ Use the repository scripts as the canonical entry points:
 - `npm run dev`: run the Vite frontend in a browser
 - `npm run tauri dev`: launch the desktop overlay with live reload
 - `npm run build`: type-check TypeScript and create the frontend bundle
-- `npm test`: run both Vitest and Rust tests
+- `npm test`: run the frontend Vitest suites (also used by Node CI)
+- `npm run test:all`: run both frontend and Rust tests locally
 - `npm run test:frontend`: run only deterministic Vitest suites
 - `npm run test:rust`: run Rust unit tests through the Tauri manifest
-- `npm run lint`: type-check TypeScript, check Rust formatting, and run Clippy
+- `npm run lint`: type-check TypeScript without invoking Rust tooling
+- `npm run lint:all`: type-check TypeScript, check Rust formatting, and run Clippy
 - `npm run tauri build`: create the native package on the current target OS
 
-Run `npm test`, `npm run lint`, and `npm run build` before submitting changes.
+Run `npm run test:all`, `npm run lint:all`, and `npm run build` before submitting changes.
 Build and manually inspect native packages on both Windows and macOS for a release.
 
 ## TypeScript and Frontend Conventions
