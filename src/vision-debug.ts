@@ -19,7 +19,6 @@ const preview = requireElement<HTMLCanvasElement>("#camera-preview");
 const placeholder = requireElement<HTMLParagraphElement>("#camera-placeholder");
 const streamState = requireElement<HTMLSpanElement>("#stream-state");
 const debugOutput = requireElement<HTMLPreElement>("#debug-output");
-const runtimeNote = requireElement<HTMLParagraphElement>("#runtime-note");
 const startButton = requireElement<HTMLButtonElement>("#start-camera");
 const stopButton = requireElement<HTMLButtonElement>("#stop-camera");
 const visionStream = new WebcamVisionStream(preview);
@@ -106,16 +105,8 @@ stopButton.addEventListener("click", stopCamera);
 window.addEventListener("beforeunload", () => visionStream.stop());
 
 if (ENABLE_VISION_DEBUG_VIEW) {
-  void getVisionStatus()
-    .then((status) => {
-      runtimeNote.textContent = `${status.runtime}: ${status.detector} → ${status.actionRecognizer}`;
-    })
-    .catch((error: unknown) => {
-      runtimeNote.textContent = `Backend-Status nicht verfügbar: ${String(error)}`;
-    });
   void startCamera();
 } else {
-  runtimeNote.textContent = "Debug-View ist über ENABLE_VISION_DEBUG_VIEW deaktiviert.";
   placeholder.textContent = "Debug-View deaktiviert";
   startButton.disabled = true;
 }
