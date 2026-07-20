@@ -239,4 +239,61 @@ mod tests {
         assert!(backend.previous_luma.is_none());
         assert!(backend.frame_dimensions.is_none());
     }
+
+    #[test]
+    fn rejects_zero_sized_frames() {
+        let mut backend = MovinetBackend::default();
+        let result = backend.classify(MovinetFrame {
+            width: 0,
+            height: 2,
+            rgb: Vec::new(),
+            timestamp_ms: 0,
+        });
+
+        assert_eq!(
+            result.unwrap_err(),
+            "frame dimensions must be greater than zero"
+        );
+        assert_eq!(backend.status().frames_seen, 0);
+    }
+
+    #[test]
+    fn rejects_dimension_changes_without_mutating_stream_state() {
+        let mut backend = MovinetBackend::default();
+        backend.classify(solid_frame(0, 100)).unwrap();
+
+        let result = backend.classify(MovinetFrame {
+            width: 3,
+            height: 2,
+            rgb: vec![0; 18],
+            timestamp_ms: 200,
+        });
+
+        assert!(result.unwrap_err().contains("reset the stream first"));
+        assert_eq!(backend.status().frames_seen, 1);
+        assert_eq!(backend.last_timestamp_ms, Some(100));
+    }
+
+    #[test]
+    fn rejects_timestamps_that_move_backwards() {
+        let mut backend = MovinetBackend::default();
+        backend.classify(solid_frame(0, 100)).unwrap();
+
+        let result = backend.classify(solid_frame(0, 99));
+
+        assert_eq!(
+            result.unwrap_err(),
+            "frame timestamps must be monotonically increasing"
+        );
+        assert_eq!(backend.status().frames_seen, 1);
+    }
+
+    #[test]
+    fn reports_warmup_after_three_frames() {
+        let mut backend = MovinetBackend::default();
+
+        assert!(!backend.classify(solid_frame(0, 0)).unwrap().warmed_up);
+        assert!(!backend.classify(solid_frame(0, 1)).unwrap().warmed_up);
+        assert!(backend.classify(solid_frame(0, 2)).unwrap().warmed_up);
+    }
 }

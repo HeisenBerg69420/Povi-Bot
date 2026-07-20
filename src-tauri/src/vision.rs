@@ -408,4 +408,72 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn rejects_zero_sized_frames_without_advancing_state() {
+        let mut backend = VisionBackend::default();
+
+        let result = backend.process(frame(0, 2, Vec::new(), 0));
+
+        assert_eq!(
+            result.unwrap_err(),
+            "frame dimensions must be greater than zero"
+        );
+        assert_eq!(backend.status().frames_seen, 0);
+    }
+
+    #[test]
+    fn rejects_timestamps_that_move_backwards() {
+        let mut backend = VisionBackend::default();
+        backend.process(frame(2, 2, vec![0; 12], 100)).unwrap();
+
+        let result = backend.process(frame(2, 2, vec![0; 12], 99));
+
+        assert_eq!(
+            result.unwrap_err(),
+            "frame timestamps must be monotonically increasing"
+        );
+        assert_eq!(backend.status().frames_seen, 1);
+        assert_eq!(backend.last_timestamp_ms, Some(100));
+    }
+
+    #[test]
+    fn action_recognizer_tracks_rightward_motion_and_warmup() {
+        let mut recognizer = PrototypeActionRecognizer::default();
+        let test_frame = frame(100, 100, vec![0; 30_000], 0);
+
+        let prediction = (0..TEMPORAL_WINDOW_FRAMES)
+            .map(|index| ObjectDetection {
+                class_id: 0,
+                label: "foreground-region".to_string(),
+                confidence: 1.0,
+                bounding_box: BoundingBox {
+                    x: (index * 10) as u32,
+                    y: 40,
+                    width: 10,
+                    height: 10,
+                },
+            })
+            .map(|detection| recognizer.classify(&test_frame, &[detection]))
+            .last()
+            .unwrap();
+
+        assert_eq!(prediction.label, "moving-right");
+        assert!(prediction.warmed_up);
+        assert_eq!(prediction.observed_frames, TEMPORAL_WINDOW_FRAMES);
+    }
+
+    #[test]
+    fn reset_allows_new_dimensions_and_timestamps() {
+        let mut backend = VisionBackend::default();
+        backend.process(frame(2, 2, vec![0; 12], 100)).unwrap();
+        backend.reset();
+
+        let prediction = backend
+            .process(frame(3, 1, vec![0; 9], 10))
+            .expect("a reset starts an independent stream");
+
+        assert_eq!(prediction.frame_index, 0);
+        assert_eq!(prediction.timestamp_ms, 10);
+    }
 }
