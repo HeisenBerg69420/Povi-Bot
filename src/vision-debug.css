@@ -1,0 +1,122 @@
+:root {
+  color: #111111;
+  background: #eeeeee;
+  font-family: Arial, Helvetica, sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-width: 100%;
+  min-height: 100%;
+  margin: 0;
+  background: #eeeeee;
+}
+
+button {
+  padding: 6px 12px;
+  border: 1px solid #777777;
+  border-radius: 2px;
+  color: #111111;
+  background: #dddddd;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #cccccc;
+}
+
+button:disabled {
+  color: #888888;
+  cursor: default;
+}
+
+.debug-view {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  width: 100%;
+  min-height: 100vh;
+  padding: 16px;
+}
+
+.debug-view__header,
+.debug-view__controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.debug-view__header h1,
+.runtime-note,
+.debug-output {
+  margin: 0;
+}
+
+.debug-view__header h1 {
+  font-size: 20px;
+}
+
+.debug-view__header span,
+.runtime-note {
+  font-size: 12px;
+}
+
+.camera-panel {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border: 1px solid #777777;
+  background: #000000;
+}
+
+#camera-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#camera-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  padding: 20px;
+  margin: 0;
+  place-items: center;
+  color: #ffffff;
+  text-align: center;
+  background: #000000;
+}
+
+#camera-placeholder[hidden] {
+  display: none;
+}
+
+.debug-output,
+.runtime-note {
+  overflow-wrap: anywhere;
+  font-family: Consolas, "Courier New", monospace;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.debug-output {
+  min-height: 72px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.runtime-note {
+  color: #333333;
+}
+
+.debug-view__controls {
+  justify-content: flex-start;
+}

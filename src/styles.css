@@ -1,0 +1,63 @@
+:root {
+  background: transparent;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+body {
+  display: grid;
+  place-items: center;
+}
+
+.pet {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+  appearance: none;
+}
+
+.pet:active {
+  cursor: grabbing;
+}
+
+.pet__sprite {
+  display: block;
+  width: 192px;
+  height: 208px;
+  background-repeat: no-repeat;
+  transform-origin: center;
+}
+
+.pet[data-direction="left"] .pet__sprite {
+  transform: scaleX(-1);
+}
+
+.pet__status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.reduced-motion .pet__sprite {
+  transform: none;
+}
+
