@@ -5,6 +5,8 @@
 *.pth
 *.safetensors
 *.bin
+__pycache__/
+*.py[cod]
 dataset/
 runs/
 !README.md
