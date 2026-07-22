@@ -5,5 +5,7 @@
 *.pth
 *.safetensors
 *.bin
+dataset/
+runs/
 !README.md
 !.gitignore
