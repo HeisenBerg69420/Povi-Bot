@@ -1,5 +1,5 @@
 export const spriteSheet = {
-  url: "public/assets/spritesheet.webp",
+  url: "/assets/spritesheet.webp",
   width: 1_536,
   height: 2_288,
   columns: 8,

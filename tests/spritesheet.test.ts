@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { frameBackgroundPosition, spriteSheet } from "../src/spritesheet";
 
 describe("sprite sheet", () => {
+  it("uses the Vite public-directory URL in production builds", () => {
+    expect(spriteSheet.url).toBe("/assets/spritesheet.webp");
+  });
+
   it("matches the source image grid", () => {
     expect(spriteSheet.frameWidth * spriteSheet.columns).toBe(spriteSheet.width);
     expect(spriteSheet.frameHeight * spriteSheet.rows).toBe(spriteSheet.height);

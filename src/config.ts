@@ -1,3 +1,4 @@
-// Global development switch: set to false to omit the camera debug window.
-export const ENABLE_VISION_DEBUG_VIEW = true;
+// The camera diagnostics window is available during development, but never
+// opens automatically in a packaged production build.
+export const ENABLE_VISION_DEBUG_VIEW = import.meta.env.DEV;
 
