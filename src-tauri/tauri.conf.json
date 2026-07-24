@@ -46,7 +46,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "resources": {
+      "../models/PoviNet.onnx": "models/PoviNet.onnx",
+      "../models/PoviNet.labels.txt": "models/PoviNet.labels.txt"
+    }
   }
 }
 

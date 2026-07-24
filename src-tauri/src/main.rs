@@ -5,12 +5,23 @@ mod vision;
 
 use movinet::{movinet_classify_frame, movinet_reset, movinet_status, MovinetBackend};
 use std::sync::Mutex;
+use tauri::Manager;
 use vision::{vision_process_frame, vision_reset, vision_status, VisionBackend};
 
 fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(MovinetBackend::default()))
-        .manage(Mutex::new(VisionBackend::default()))
+        .setup(|app| {
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .map_err(|error| format!("failed to resolve resource directory: {error}"))?;
+            let model_path = resource_dir.join("models").join("PoviNet.onnx");
+            let labels_path = resource_dir.join("models").join("PoviNet.labels.txt");
+            let backend = VisionBackend::with_onnx_action_model(&model_path, &labels_path)?;
+            app.manage(Mutex::new(backend));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             movinet_status,
             movinet_reset,

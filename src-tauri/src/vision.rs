@@ -1,5 +1,7 @@
+use ort::{session::Session, value::Tensor};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
 
@@ -7,6 +9,11 @@ const RECOMMENDED_WIDTH: u32 = 320;
 const RECOMMENDED_HEIGHT: u32 = 240;
 const FOREGROUND_LUMA_THRESHOLD: u8 = 28;
 const TEMPORAL_WINDOW_FRAMES: usize = 8;
+const MODEL_WIDTH: usize = 256;
+const MODEL_HEIGHT: usize = 256;
+const PREDICTION_WINDOW_FRAMES: usize = 5;
+const MODEL_INPUT_NAME: &str = "images";
+const MODEL_OUTPUT_NAME: &str = "logits";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,14 +81,18 @@ pub trait LowLevelDetector: Send {
 }
 
 pub trait TemporalActionRecognizer: Send {
-    fn classify(&mut self, frame: &VisionFrame, detections: &[ObjectDetection])
-        -> ActionPrediction;
+    fn classify(
+        &mut self,
+        frame: &VisionFrame,
+        detections: &[ObjectDetection],
+    ) -> Result<ActionPrediction, String>;
     fn reset(&mut self);
 }
 
 #[derive(Default)]
 struct PrototypeForegroundDetector {
     previous_luma: Option<Vec<u8>>,
+    last_detections: Vec<ObjectDetection>,
 }
 
 impl LowLevelDetector for PrototypeForegroundDetector {
@@ -123,11 +134,11 @@ impl LowLevelDetector for PrototypeForegroundDetector {
         let pixel_count = frame.width * frame.height;
         let minimum_changed_pixels = (pixel_count / 500).max(4);
         if changed_pixels < minimum_changed_pixels {
-            return Ok(Vec::new());
+            return Ok(self.last_detections.clone());
         }
 
         let changed_ratio = changed_pixels as f32 / pixel_count as f32;
-        Ok(vec![ObjectDetection {
+        let detections = vec![ObjectDetection {
             class_id: 0,
             label: "foreground-region".to_string(),
             confidence: (changed_ratio * 8.0).clamp(0.1, 1.0),
@@ -137,11 +148,14 @@ impl LowLevelDetector for PrototypeForegroundDetector {
                 width: maximum_x - minimum_x + 1,
                 height: maximum_y - minimum_y + 1,
             },
-        }])
+        }];
+        self.last_detections.clone_from(&detections);
+        Ok(detections)
     }
 
     fn reset(&mut self) {
         self.previous_luma = None;
+        self.last_detections.clear();
     }
 }
 
@@ -155,7 +169,7 @@ impl TemporalActionRecognizer for PrototypeActionRecognizer {
         &mut self,
         frame: &VisionFrame,
         detections: &[ObjectDetection],
-    ) -> ActionPrediction {
+    ) -> Result<ActionPrediction, String> {
         let centroid = detections.first().map(|detection| {
             let bounds = &detection.bounding_box;
             (
@@ -196,17 +210,107 @@ impl TemporalActionRecognizer for PrototypeActionRecognizer {
             _ => (0, "no-foreground-object", 1.0),
         };
 
-        ActionPrediction {
+        Ok(ActionPrediction {
             class_id,
             label: label.to_string(),
             confidence,
             warmed_up,
             observed_frames,
-        }
+        })
     }
 
     fn reset(&mut self) {
         self.centroids.clear();
+    }
+}
+
+struct OnnxActionRecognizer {
+    session: Session,
+    labels: Vec<String>,
+    probability_history: VecDeque<Vec<f32>>,
+}
+
+impl OnnxActionRecognizer {
+    fn load(model_path: &Path, labels_path: &Path) -> Result<Self, String> {
+        let labels = read_labels(labels_path)?;
+        if labels.is_empty() {
+            return Err("the action label file must contain at least one label".to_string());
+        }
+
+        let session = Session::builder()
+            .map_err(|error| format!("failed to create ONNX session builder: {error}"))?
+            .commit_from_file(model_path)
+            .map_err(|error| {
+                format!(
+                    "failed to load ONNX action model '{}': {error}",
+                    model_path.display()
+                )
+            })?;
+
+        Ok(Self {
+            session,
+            labels,
+            probability_history: VecDeque::with_capacity(PREDICTION_WINDOW_FRAMES),
+        })
+    }
+
+    fn infer_probabilities(&mut self, frame: &VisionFrame) -> Result<Vec<f32>, String> {
+        let input_values = preprocess_rgb_frame(frame);
+        let input = Tensor::from_array((
+            [1_usize, 3, MODEL_HEIGHT, MODEL_WIDTH],
+            input_values.into_boxed_slice(),
+        ))
+        .map_err(|error| format!("failed to create ONNX input tensor: {error}"))?;
+
+        let outputs = self
+            .session
+            .run(ort::inputs![MODEL_INPUT_NAME => input])
+            .map_err(|error| format!("ONNX action inference failed: {error}"))?;
+        let logits = outputs[MODEL_OUTPUT_NAME]
+            .try_extract_array::<f32>()
+            .map_err(|error| format!("failed to read ONNX logits: {error}"))?;
+        let logits: Vec<f32> = logits.iter().copied().collect();
+
+        if logits.len() != self.labels.len() {
+            return Err(format!(
+                "ONNX model returned {} logits, but {} labels are configured",
+                logits.len(),
+                self.labels.len()
+            ));
+        }
+
+        softmax(&logits)
+    }
+}
+
+impl TemporalActionRecognizer for OnnxActionRecognizer {
+    fn classify(
+        &mut self,
+        frame: &VisionFrame,
+        _detections: &[ObjectDetection],
+    ) -> Result<ActionPrediction, String> {
+        let probabilities = self.infer_probabilities(frame)?;
+        self.probability_history.push_back(probabilities);
+        if self.probability_history.len() > PREDICTION_WINDOW_FRAMES {
+            self.probability_history.pop_front();
+        }
+
+        let averaged_probabilities =
+            average_probabilities(&self.probability_history, self.labels.len())?;
+        let (class_id, confidence) = maximum_probability(&averaged_probabilities)?;
+        let observed_frames = self.probability_history.len();
+
+        Ok(ActionPrediction {
+            class_id: class_id as u32,
+            label: self.labels[class_id].clone(),
+            confidence,
+            warmed_up: observed_frames >= PREDICTION_WINDOW_FRAMES,
+            observed_frames,
+        })
+    }
+
+    fn reset(&mut self) {
+        self.probability_history.clear();
     }
 }
 
@@ -216,6 +320,9 @@ pub struct VisionBackend {
     frame_dimensions: Option<(u32, u32)>,
     last_timestamp_ms: Option<u64>,
     frames_seen: u64,
+    runtime: &'static str,
+    action_recognizer_name: &'static str,
+    note: &'static str,
 }
 
 impl Default for VisionBackend {
@@ -226,22 +333,42 @@ impl Default for VisionBackend {
             frame_dimensions: None,
             last_timestamp_ms: None,
             frames_seen: 0,
+            runtime: "prototype",
+            action_recognizer_name: "centroid-motion-prototype",
+            note: "The local pipeline is active, but no ML weights are loaded.",
         }
     }
 }
 
 impl VisionBackend {
+    pub fn with_onnx_action_model(model_path: &Path, labels_path: &Path) -> Result<Self, String> {
+        Ok(Self {
+            detector: Box::<PrototypeForegroundDetector>::default(),
+            action_recognizer: Box::new(OnnxActionRecognizer::load(model_path, labels_path)?),
+            frame_dimensions: None,
+            last_timestamp_ms: None,
+            frames_seen: 0,
+            runtime: "onnx-runtime",
+            action_recognizer_name: "PoviNet-image-classifier",
+            note: "PoviNet classifies each complete camera frame; predictions are averaged across five frames.",
+        })
+    }
+
     fn status(&self) -> VisionStatus {
         VisionStatus {
             ready: true,
-            runtime: "prototype",
+            runtime: self.runtime,
             detector: "frame-difference-foreground-prototype",
-            action_recognizer: "centroid-motion-prototype",
+            action_recognizer: self.action_recognizer_name,
             recommended_width: RECOMMENDED_WIDTH,
             recommended_height: RECOMMENDED_HEIGHT,
-            temporal_window_frames: TEMPORAL_WINDOW_FRAMES,
+            temporal_window_frames: if self.runtime == "onnx-runtime" {
+                PREDICTION_WINDOW_FRAMES
+            } else {
+                TEMPORAL_WINDOW_FRAMES
+            },
             frames_seen: self.frames_seen,
-            note: "The complete local pipeline is active, but no ML weights are loaded. Replace both prototype implementations with model runtimes before using semantic labels.",
+            note: self.note,
         }
     }
 
@@ -272,7 +399,7 @@ impl VisionBackend {
         }
 
         let detections = self.detector.detect(&frame)?;
-        let action = self.action_recognizer.classify(&frame, &detections);
+        let action = self.action_recognizer.classify(&frame, &detections)?;
         let prediction = VisionPrediction {
             detections,
             action,
@@ -285,6 +412,101 @@ impl VisionBackend {
         self.frames_seen += 1;
         Ok(prediction)
     }
+}
+
+fn read_labels(path: &Path) -> Result<Vec<String>, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| format!("failed to read action labels '{}': {error}", path.display()))?;
+    Ok(contents
+        .lines()
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+fn preprocess_rgb_frame(frame: &VisionFrame) -> Vec<f32> {
+    let mut input = vec![0.0_f32; 3 * MODEL_WIDTH * MODEL_HEIGHT];
+    let source_width = frame.width as usize;
+    let source_height = frame.height as usize;
+
+    for target_y in 0..MODEL_HEIGHT {
+        let source_y = ((target_y as f32 + 0.5) * source_height as f32 / MODEL_HEIGHT as f32 - 0.5)
+            .clamp(0.0, (source_height - 1) as f32);
+        let top = source_y.floor() as usize;
+        let bottom = (top + 1).min(source_height - 1);
+        let vertical_weight = source_y - top as f32;
+
+        for target_x in 0..MODEL_WIDTH {
+            let source_x = ((target_x as f32 + 0.5) * source_width as f32 / MODEL_WIDTH as f32
+                - 0.5)
+                .clamp(0.0, (source_width - 1) as f32);
+            let left = source_x.floor() as usize;
+            let right = (left + 1).min(source_width - 1);
+            let horizontal_weight = source_x - left as f32;
+            let target_index = target_y * MODEL_WIDTH + target_x;
+
+            for channel in 0..3 {
+                let top_left = frame.rgb[(top * source_width + left) * 3 + channel] as f32;
+                let top_right = frame.rgb[(top * source_width + right) * 3 + channel] as f32;
+                let bottom_left = frame.rgb[(bottom * source_width + left) * 3 + channel] as f32;
+                let bottom_right = frame.rgb[(bottom * source_width + right) * 3 + channel] as f32;
+                let top_value = top_left + (top_right - top_left) * horizontal_weight;
+                let bottom_value = bottom_left + (bottom_right - bottom_left) * horizontal_weight;
+                let pixel = top_value + (bottom_value - top_value) * vertical_weight;
+
+                input[channel * MODEL_WIDTH * MODEL_HEIGHT + target_index] = pixel / 127.5 - 1.0;
+            }
+        }
+    }
+
+    input
+}
+
+fn softmax(logits: &[f32]) -> Result<Vec<f32>, String> {
+    if logits.is_empty() {
+        return Err("ONNX model returned no logits".to_string());
+    }
+    if logits.iter().any(|value| !value.is_finite()) {
+        return Err("ONNX model returned a non-finite logit".to_string());
+    }
+
+    let maximum = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let exponentials: Vec<f32> = logits.iter().map(|value| (value - maximum).exp()).collect();
+    let sum: f32 = exponentials.iter().sum();
+    Ok(exponentials.into_iter().map(|value| value / sum).collect())
+}
+
+fn average_probabilities(
+    history: &VecDeque<Vec<f32>>,
+    class_count: usize,
+) -> Result<Vec<f32>, String> {
+    if history.is_empty() {
+        return Err("cannot average an empty prediction history".to_string());
+    }
+
+    let mut averages = vec![0.0_f32; class_count];
+    for probabilities in history {
+        if probabilities.len() != class_count {
+            return Err("prediction history contains incompatible class counts".to_string());
+        }
+        for (average, probability) in averages.iter_mut().zip(probabilities) {
+            *average += probability;
+        }
+    }
+    for average in &mut averages {
+        *average /= history.len() as f32;
+    }
+    Ok(averages)
+}
+
+fn maximum_probability(probabilities: &[f32]) -> Result<(usize, f32), String> {
+    probabilities
+        .iter()
+        .copied()
+        .enumerate()
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .ok_or_else(|| "model returned no class probabilities".to_string())
 }
 
 fn validate_frame(frame: &VisionFrame) -> Result<(), String> {
@@ -389,6 +611,37 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_last_foreground_detection_when_too_few_pixels_change() {
+        let mut backend = VisionBackend::default();
+        backend.process(frame(4, 4, vec![0; 48], 0)).unwrap();
+
+        let mut changed = vec![0; 48];
+        for pixel_index in [5_usize, 6, 9, 10] {
+            changed[pixel_index * 3..pixel_index * 3 + 3].fill(255);
+        }
+        let detected = backend.process(frame(4, 4, changed.clone(), 100)).unwrap();
+        let unchanged = backend.process(frame(4, 4, changed, 200)).unwrap();
+
+        assert_eq!(unchanged.detections.len(), 1);
+        assert_eq!(
+            unchanged.detections[0].bounding_box.x,
+            detected.detections[0].bounding_box.x
+        );
+        assert_eq!(
+            unchanged.detections[0].bounding_box.y,
+            detected.detections[0].bounding_box.y
+        );
+        assert_eq!(
+            unchanged.detections[0].bounding_box.width,
+            detected.detections[0].bounding_box.width
+        );
+        assert_eq!(
+            unchanged.detections[0].bounding_box.height,
+            detected.detections[0].bounding_box.height
+        );
+    }
+
+    #[test]
     fn reset_clears_both_pipeline_stages() {
         let mut backend = VisionBackend::default();
         backend.process(frame(2, 2, vec![0; 12], 0)).unwrap();
@@ -454,7 +707,7 @@ mod tests {
                     height: 10,
                 },
             })
-            .map(|detection| recognizer.classify(&test_frame, &[detection]))
+            .map(|detection| recognizer.classify(&test_frame, &[detection]).unwrap())
             .last()
             .unwrap();
 
@@ -475,5 +728,53 @@ mod tests {
 
         assert_eq!(prediction.frame_index, 0);
         assert_eq!(prediction.timestamp_ms, 10);
+    }
+
+    #[test]
+    fn preprocessing_converts_rgb_to_normalized_nchw() {
+        let input = preprocess_rgb_frame(&frame(1, 1, vec![0, 128, 255], 0));
+        let plane_size = MODEL_WIDTH * MODEL_HEIGHT;
+
+        assert_eq!(input.len(), plane_size * 3);
+        assert_eq!(input[0], -1.0);
+        assert!((input[plane_size] - (128.0 / 127.5 - 1.0)).abs() < f32::EPSILON);
+        assert_eq!(input[plane_size * 2], 1.0);
+    }
+
+    #[test]
+    fn softmax_is_stable_and_sums_to_one() {
+        let probabilities = softmax(&[1_000.0, 1_001.0, 1_002.0]).unwrap();
+        let sum: f32 = probabilities.iter().sum();
+
+        assert!((sum - 1.0).abs() < 1e-6);
+        assert_eq!(maximum_probability(&probabilities).unwrap().0, 2);
+    }
+
+    #[test]
+    fn averaging_smooths_probabilities_across_frames() {
+        let history = VecDeque::from([vec![0.8, 0.2], vec![0.6, 0.4], vec![0.1, 0.9]]);
+        let averaged = average_probabilities(&history, 2).unwrap();
+
+        assert!((averaged[0] - 0.5).abs() < 1e-6);
+        assert!((averaged[1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    #[ignore = "requires the local, untracked PoviNet ONNX model"]
+    fn loads_local_onnx_model_and_classifies_a_frame() {
+        let models_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../models");
+        let mut recognizer = OnnxActionRecognizer::load(
+            &models_dir.join("PoviNet.onnx"),
+            &models_dir.join("PoviNet.labels.txt"),
+        )
+        .unwrap();
+
+        let prediction = recognizer
+            .classify(&frame(320, 240, vec![0; 320 * 240 * 3], 0), &[])
+            .unwrap();
+
+        assert!(recognizer.labels.contains(&prediction.label));
+        assert!(prediction.confidence.is_finite());
+        assert!((0.0..=1.0).contains(&prediction.confidence));
     }
 }

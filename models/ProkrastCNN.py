@@ -3,13 +3,15 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import onnxscript
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
-from torchvision import transforms
+from torchvision import datasets, transforms
 
 
 MODELS_DIR = Path(__file__).resolve().parent
@@ -17,16 +19,12 @@ MODELS_DIR = Path(__file__).resolve().parent
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    dataset_dir: Path = (
-        MODELS_DIR
-        / "dataset"
-        / "archive"
-        / "Human Action Recognition"
-    )
+    # dataset_dir: Path = (MODELS_DIR/ "dataset"/ "archive"/ "Human Action Recognition" ) 
+    dataset_dir: Path = (MODELS_DIR/ "dataset"/ "Final Dataset 256"/ "Final Dataset 256" ) 
     image_size: int = 256
     batch_size: int = 64
     learning_rate: float = 3e-4
-    epochs: int = 100
+    epochs: int = 3
     early_stopping_patience: int = 10
     early_stopping_min_delta: float = 1e-4
     random_seed: int = 42
@@ -105,6 +103,10 @@ def read_labels(annotations_path: Path) -> list[str]:
 
     return sorted(labels)
 
+def read_labels_Hierarchical(annotations_path: Path) -> list[str]:
+    labels = [f.name for f in annotations_path.iterdir() if f.is_dir()]
+    return sorted(labels)
+
 class ProkrastCNN(nn.Module):
     def __init__(self, number_of_classes: int) -> None:
         super().__init__()
@@ -137,7 +139,10 @@ class ProkrastCNN(nn.Module):
         )
         self.classifier = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(256 * 4 * 4, 256),
+            nn.Linear(256 * 4 * 4, 1024),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(1024, 256),
             nn.ReLU(),
             nn.Dropout(0.35),
             nn.Linear(256, number_of_classes),
@@ -245,6 +250,80 @@ def create_data_loaders(
     return training_loader, validation_loader, class_names
 
 
+def create_hierarchical_data_loaders(
+    config: TrainingConfig,
+    images_dir: Path | None = None,
+) -> tuple[DataLoader, DataLoader, list[str]]:
+    """Create loaders for images grouped into class directories.
+
+    Expected layout:
+
+    dataset_dir/
+        class_a/
+            image_1.jpg
+            optional_subdirectory/image_2.jpg
+        class_b/
+            image_3.jpg
+    """
+    dataset_root = images_dir or config.dataset_dir
+    if not dataset_root.is_dir():
+        raise FileNotFoundError(
+            f"Datensatz-Ordner nicht gefunden: {dataset_root}"
+        )
+    if not 0 <= config.validation_fraction < 1:
+        raise ValueError(
+            "validation_fraction muss zwischen 0 (inklusive) "
+            "und 1 (exklusive) liegen"
+        )
+
+    training_transforms, evaluation_transforms = create_transforms(
+        config.image_size
+    )
+    training_dataset = datasets.ImageFolder(
+        root=dataset_root,
+        transform=training_transforms,
+    )
+    validation_dataset = datasets.ImageFolder(
+        root=dataset_root,
+        transform=evaluation_transforms,
+    )
+
+    if not training_dataset.samples:
+        raise ValueError(
+            f"Keine unterstützten Bilder gefunden: {dataset_root}"
+        )
+
+    generator = torch.Generator().manual_seed(config.random_seed)
+    indices = torch.randperm(
+        len(training_dataset),
+        generator=generator,
+    ).tolist()
+    validation_size = int(
+        len(indices) * config.validation_fraction
+    )
+    if len(indices) > 1 and config.validation_fraction > 0:
+        validation_size = max(1, min(validation_size, len(indices) - 1))
+
+    validation_indices = indices[:validation_size]
+    training_indices = indices[validation_size:]
+
+    training_loader = DataLoader(
+        Subset(training_dataset, training_indices),
+        batch_size=config.batch_size,
+        shuffle=True,
+        generator=generator,
+        pin_memory=torch.cuda.is_available(),
+    )
+    validation_loader = DataLoader(
+        Subset(validation_dataset, validation_indices),
+        batch_size=config.batch_size,
+        shuffle=False,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+    return training_loader, validation_loader, training_dataset.classes
+
+
 def select_device() -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
@@ -270,7 +349,7 @@ def show_predictions(
     validation_loader: DataLoader,
     class_names: list[str],
     device: torch.device,
-    number_of_images: int = 4,
+    number_of_images: int = 20,
 ) -> None:
     random_indices = torch.randperm(
         len(validation_loader.dataset)
@@ -316,7 +395,8 @@ def main() -> None:
     config = TrainingConfig()
     torch.manual_seed(config.random_seed)
 
-    training_loader, validation_loader, class_names = create_data_loaders(config)
+    # training_loader, validation_loader, class_names = create_data_loaders(config) decise dependent on what dataseet 
+    training_loader, validation_loader, class_names = create_hierarchical_data_loaders(config)
     device = select_device()
     model = ProkrastCNN(number_of_classes=len(class_names)).to(device)
 
@@ -346,8 +426,8 @@ def main() -> None:
     epochs_without_improvement = 0
     model_path = MODELS_DIR / "PoviNet.pt"
     training_started_at = time.perf_counter()
-    
-    '''
+    iteration = 0
+    print(f"iteration {iteration}")
 
     for epoch in range(config.epochs):
         epoch_started_at = time.perf_counter()
@@ -355,10 +435,13 @@ def main() -> None:
         running_training_loss = 0.0
         correct_training_predictions = 0
         training_samples = 0
+        print(f"iteration {iteration}")
 
         for inputs, labels in training_loader:
             inputs = inputs.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
+            
+            print(f"iteration {iteration}")
 
             optimizer.zero_grad()
 
@@ -374,6 +457,9 @@ def main() -> None:
                 predicted_classes == labels
             ).sum().item()
             training_samples += labels.size(0)
+            iteration += 1
+            if iteration % 100 == 0:
+                print(f"iteration {iteration}")
 
         average_training_loss = running_training_loss / len(training_loader)
         training_accuracy = correct_training_predictions / training_samples
@@ -460,12 +546,101 @@ def main() -> None:
     plt.legend()
     plt.tight_layout()
     plt.show()
-        '''
+    
 
     model.load_state_dict(
         torch.load(model_path, map_location=device, weights_only=True)
     )
     show_predictions(model, validation_loader, class_names, device)
+
+
+def export_onnx_csvDatSet() -> None:
+    config = TrainingConfig()
+
+    annotations_path = (
+        config.dataset_dir / "Training_set.csv"
+    )
+    class_names = read_labels(annotations_path)
+
+    model = ProkrastCNN(
+        number_of_classes=len(class_names),
+    )
+    model.load_state_dict(
+        torch.load(
+            MODELS_DIR / "PoviNet.pt",
+            map_location="cpu",
+            weights_only=True,
+        )
+    )
+    model.eval()
+
+    example_input = torch.zeros(
+        1,
+        3,
+        config.image_size,
+        config.image_size,
+        dtype=torch.float32,
+    )
+
+    onnx_program = torch.onnx.export(
+        model,
+        (example_input,),
+        input_names=["images"],
+        output_names=["logits"],
+        dynamo=True,
+        external_data=False,
+        verify=True,
+    )
+    onnx_program.save(MODELS_DIR / "PoviNet.onnx")
+
+    (MODELS_DIR / "PoviNet.labels.txt").write_text(
+        "\n".join(class_names),
+        encoding="utf-8",
+    )
+#    python -c "from models.ProkrastCNN import export_onnx_csvDatSet; export_onnx_csvDatSet ()"
+    
+def export_onnx_HierarchicalDatSet() -> None:
+    config = TrainingConfig()
+
+    class_names = read_labels_Hierarchical(config.dataset_dir)
+
+    model = ProkrastCNN(
+        number_of_classes=len(class_names),
+    )
+    model.load_state_dict(
+        torch.load(
+            MODELS_DIR / "PoviNet.pt",
+            map_location="cpu",
+            weights_only=True,
+        )
+    )
+    model.eval()
+
+    example_input = torch.zeros(
+        1,
+        3,
+        config.image_size,
+        config.image_size,
+        dtype=torch.float32,
+    )
+
+    onnx_program = torch.onnx.export(
+        model,
+        (example_input,),
+        input_names=["images"],
+        output_names=["logits"],
+        dynamo=True,
+        external_data=False,
+        verify=True,
+    )
+    onnx_program.save(MODELS_DIR / "PoviNet.onnx")
+
+    (MODELS_DIR / "PoviNet.labels.txt").write_text(
+        "\n".join(class_names),
+        encoding="utf-8",
+    )
+    
+#    python -c "from models.ProkrastCNN import export_onnx_HierarchicalDatSet; export_onnx_HierarchicalDatSet ()"
 
 if __name__ == "__main__":
     main()
