@@ -346,6 +346,8 @@ def main() -> None:
     epochs_without_improvement = 0
     model_path = MODELS_DIR / "PoviNet.pt"
     training_started_at = time.perf_counter()
+    
+    '''
 
     for epoch in range(config.epochs):
         epoch_started_at = time.perf_counter()
@@ -458,6 +460,7 @@ def main() -> None:
     plt.legend()
     plt.tight_layout()
     plt.show()
+        '''
 
     model.load_state_dict(
         torch.load(model_path, map_location=device, weights_only=True)
