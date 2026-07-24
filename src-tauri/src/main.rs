@@ -7,16 +7,6 @@ use movinet::{movinet_classify_frame, movinet_reset, movinet_status, MovinetBack
 use std::sync::Mutex;
 use vision::{vision_process_frame, vision_reset, vision_status, VisionBackend};
 
-#[tauri::command]
-fn get_mouse_position() -> Result<(i32, i32), String> {
-    match mouse_position::mouse_position::Mouse::get_mouse_position() {
-        mouse_position::mouse_position::Mouse::Position { x, y } => Ok((x, y)),
-        mouse_position::mouse_position::Mouse::Error => {
-            Err("Mausposition konnte nicht gelesen werden".into())
-        }
-    }
-}
-
 fn main() {
     tauri::Builder::default()
         .manage(Mutex::new(MovinetBackend::default()))
@@ -27,8 +17,7 @@ fn main() {
             movinet_classify_frame,
             vision_status,
             vision_reset,
-            vision_process_frame,
-            get_mouse_position
+            vision_process_frame
         ])
         .run(tauri::generate_context!())
         .expect("failed to run desktop pet overlay");

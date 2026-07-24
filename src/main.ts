@@ -2,9 +2,9 @@ import {
   PhysicalPosition,
   Window as TauriWindow,
   currentMonitor,
+  cursorPosition,
   getCurrentWindow,
 } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
 import {
   animationSequence,
   frameAt,
@@ -142,7 +142,7 @@ async function updateMousePosition(): Promise<void> {
 
   updatingMousePosition = true;
   try {
-    const [x, y] = await invoke<[number, number]>("get_mouse_position");
+    const { x, y } = await cursorPosition();
     spatialState.updateMousePosition({ x, y });
 
     const lookFrame = frameAtMousePosition(spatialState);
