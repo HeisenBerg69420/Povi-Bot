@@ -1,4 +1,5 @@
 import csv
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +26,9 @@ class TrainingConfig:
     image_size: int = 256
     batch_size: int = 64
     learning_rate: float = 3e-4
-    epochs: int = 20
+    epochs: int = 100
+    early_stopping_patience: int = 10
+    early_stopping_min_delta: float = 1e-4
     random_seed: int = 42
     validation_fraction: float = 0.15
 
@@ -250,6 +253,18 @@ def select_device() -> torch.device:
     return torch.device("cpu")
 
 
+def format_duration(seconds: float) -> str:
+    total_seconds = max(0, round(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours:d}h {minutes:02d}m {seconds:02d}s"
+    if minutes:
+        return f"{minutes:d}m {seconds:02d}s"
+    return f"{seconds:d}s"
+
+
 def show_predictions(
     model: ProkrastCNN,
     validation_loader: DataLoader,
@@ -262,12 +277,12 @@ def show_predictions(
     )[:number_of_images]
     model.eval()
     selected_images = []
-    selected_labels = []  
+    selected_labels = []
 
     for index in random_indices:
-     image, label = validation_loader.dataset[index.item()]
-     selected_images.append(image)
-     selected_labels.append(label)
+        image, label = validation_loader.dataset[index.item()]
+        selected_images.append(image)
+        selected_labels.append(label)
 
     images = torch.stack(selected_images)
     labels = torch.stack(selected_labels)
@@ -328,9 +343,12 @@ def main() -> None:
     training_losses: list[float] = []
     validation_losses: list[float] = []
     best_validation_loss = float("inf")
+    epochs_without_improvement = 0
     model_path = MODELS_DIR / "PoviNet.pt"
+    training_started_at = time.perf_counter()
 
     for epoch in range(config.epochs):
+        epoch_started_at = time.perf_counter()
         model.train()
         running_training_loss = 0.0
         correct_training_predictions = 0
@@ -388,9 +406,25 @@ def main() -> None:
         validation_accuracy = correct_predictions / validation_samples
         scheduler.step(average_validation_loss)
 
-        if average_validation_loss < best_validation_loss:
+        validation_improved = (
+            average_validation_loss
+            < best_validation_loss - config.early_stopping_min_delta
+        )
+        if validation_improved:
             best_validation_loss = average_validation_loss
+            epochs_without_improvement = 0
             torch.save(model.state_dict(), model_path)
+        else:
+            epochs_without_improvement += 1
+
+        epoch_duration = time.perf_counter() - epoch_started_at
+        elapsed_duration = time.perf_counter() - training_started_at
+        completed_epochs = epoch + 1
+        average_epoch_duration = elapsed_duration / completed_epochs
+        remaining_epochs = config.epochs - completed_epochs
+        estimated_remaining_duration = (
+            average_epoch_duration * remaining_epochs
+        )
 
         print(
             f"Epoch {epoch + 1:02d}/{config.epochs} | "
@@ -398,12 +432,25 @@ def main() -> None:
             f"Train Accuracy: {training_accuracy:.2%} | "
             f"Validation Loss: {average_validation_loss:.4f} | "
             f"Validation Accuracy: {validation_accuracy:.2%} | "
-            f"LR: {optimizer.param_groups[0]['lr']:.1e}"
+            f"LR: {optimizer.param_groups[0]['lr']:.1e} | "
+            f"Zeit: {format_duration(epoch_duration)} | "
+            f"ETA bis Maximum: "
+            f"{format_duration(estimated_remaining_duration)}"
         )
 
+        if epochs_without_improvement >= config.early_stopping_patience:
+            print(
+                "Early Stopping: "
+                f"{config.early_stopping_patience} Epochen ohne "
+                "ausreichende Verbesserung des Validation Loss."
+            )
+            break
+
+    total_training_duration = time.perf_counter() - training_started_at
+    print(f"Gesamte Trainingszeit: {format_duration(total_training_duration)}")
     print(f"Bestes Modell gespeichert: {model_path}")
 
-    epochs = np.arange(1, config.epochs + 1)
+    epochs = np.arange(1, len(training_losses) + 1)
     plt.plot(epochs, training_losses, label="Training Loss")
     plt.plot(epochs, validation_losses, label="Validation Loss")
     plt.xlabel("Epoch")
