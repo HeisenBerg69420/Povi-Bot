@@ -1,6 +1,7 @@
 name: Rust
 
 on:
+  workflow_call:
   push:
     branches: [ "main" ]
   pull_request:
@@ -18,7 +19,7 @@ jobs:
         working-directory: src-tauri
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Tauri system dependencies
         run: |

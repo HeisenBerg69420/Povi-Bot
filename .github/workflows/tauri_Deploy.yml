@@ -7,7 +7,16 @@ on:
       - release
 
 jobs:
+  node-checks:
+    uses: ./.github/workflows/webpack.yml
+
+  rust-checks:
+    uses: ./.github/workflows/rust.yml
+
   publish-tauri:
+    needs:
+      - node-checks
+      - rust-checks
     permissions:
       contents: write
     strategy:
@@ -27,7 +36,7 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v6
 
       - name: install dependencies (ubuntu only)
         if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm' # This must match the platform value defined above.
@@ -55,7 +64,7 @@ jobs:
 
       - name: install frontend dependencies
         # If you don't have `beforeBuildCommand` configured you may want to build your frontend here too.
-        run: npm install # change this to npm, yarn or pnpm depending on which one you use.
+        run: npm ci # change this to npm, yarn or pnpm depending on which one you use.
 
       - uses: tauri-apps/tauri-action@v1
         env:
