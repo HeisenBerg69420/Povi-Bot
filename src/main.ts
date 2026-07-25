@@ -16,10 +16,12 @@ import { ENABLE_VISION_DEBUG_VIEW } from "./config";
 import { advanceHorizontal, type HorizontalDirection } from "./movement";
 import { SpatialState } from "./spatial-state";
 import { frameBackgroundPosition, spriteSheet } from "./spritesheet";
+import { typeText } from "./typewriter";
 import "./styles.css";
 
 const MOUSE_POLL_INTERVAL_MS = 50;
 const WINDOW_MOVE_INTERVAL_MS = 32;
+const WELCOME_MESSAGE = "Hallo! Ich bin Povi.";
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -32,6 +34,7 @@ function requireElement<T extends Element>(selector: string): T {
 const pet = requireElement<HTMLButtonElement>("#pet");
 const sprite = requireElement<HTMLSpanElement>(".pet__sprite");
 const status = requireElement<HTMLSpanElement>(".pet__status");
+const speechBubble = requireElement<HTMLSpanElement>(".speech-bubble");
 
 const appWindow = getCurrentWindow();
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -248,6 +251,9 @@ reduceMotion.addEventListener("change", () => {
 });
 
 document.documentElement.classList.toggle("reduced-motion", reduceMotion.matches);
+void typeText(speechBubble, WELCOME_MESSAGE, {
+  delayMs: reduceMotion.matches ? 0 : 55,
+});
 void initializeSpatialState().catch((error: unknown) => {
   console.error("Unable to initialize spatial state", error);
 });

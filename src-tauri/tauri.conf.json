@@ -15,8 +15,8 @@
       {
         "label": "pet",
         "title": "Desktop Pet Overlay",
-        "width": 220,
-        "height": 220,
+        "width": 280,
+        "height": 290,
         "resizable": false,
         "decorations": false,
         "transparent": true,
